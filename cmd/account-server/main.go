@@ -79,7 +79,12 @@ func main() {
 	accountServer.Client = mgr.GetClient()
 
 	go func() {
-		if err := accountServer.Run(mainContext, os.Getenv("NATS_URL"), os.Getenv("NATS_CREDS_FILE")); err != nil {
+		tlsConf := accountServer.NatsTlsConfig {
+			clientCertPath: os.Getenv("NATS_CLIENT_CERT_PATH"),
+			clientKeyPath: os.Getenv("NATS_CLIENT_KEY_PATH"),
+			caPath: os.Getenv("NATS_TLS_CA_PATH"),
+		}
+		if err := accountServer.Run(mainContext, os.Getenv("NATS_URL"), os.Getenv("NATS_CREDS_FILE"), tlsConf); err != nil {
 			setupLog.Error(err, "Failed to run accountserver")
 		}
 	}()
