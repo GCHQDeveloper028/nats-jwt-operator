@@ -38,6 +38,13 @@ type NatsAccountServer struct {
 	nc         *nats.Conn
 }
 
+// Configure TLS for Nats client, if required
+type NatsTlsConfig struct {
+	ClientCertPath string
+	ClientKeyPath string
+	CaPath string
+}
+
 //+kubebuilder:rbac:groups=nats.deinstapel.de,resources=natsaccounts,verbs=get;list;watch;create;update;patch;delete
 
 func NewAccountServer() *NatsAccountServer {
@@ -45,10 +52,27 @@ func NewAccountServer() *NatsAccountServer {
 		accountMap: make(map[string]string),
 	}
 }
-func (r *NatsAccountServer) Run(ctx context.Context, url string, credsFile string) error {
+
+func connectToNats(url, credsFile string, tlsConf NatsTlsConfig) (*nats.Conn, error) {
+	opts := []nats.Option {
+		nats.UserCredentials(credsFile),
+	}
+
+	if tlsConf.ClientCertPath != "" && tlsConf.ClientKeyPath != "" {
+		opts = append(opts, nats.ClientCert(tlsConf.ClientCertPath, tlsConf.ClientKeyPath))
+	}
+
+	if tlsConf.CaPath != "" {
+		opts = append(opts, nats.RootCAs(tlsConf.CaPath))
+	}
+
+	return nats.Connect(url, opts...)
+}
+
+func (r *NatsAccountServer) Run(ctx context.Context, url string, credsFile string, tlsConf NatsTlsConfig) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Connecting to nats", "server", url)
-	nc, err := nats.Connect(url, nats.UserCredentials(credsFile))
+	nc, err := connectToNats(url, credsFile, tlsConf)
 	if err != nil {
 		return err
 	}
