@@ -19,6 +19,9 @@ package controllers
 import (
 	"context"
 	"strings"
+	"sync"
+	"fmt"
+	"net/http"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -36,6 +39,8 @@ type NatsAccountServer struct {
 	Scheme     *runtime.Scheme
 	accountMap map[string]string
 	nc         *nats.Conn
+	alive      chan interface{}
+	natsReady  sync.Mutex
 }
 
 // Configure TLS for Nats client, if required
@@ -48,9 +53,16 @@ type NatsTlsConfig struct {
 //+kubebuilder:rbac:groups=nats.deinstapel.de,resources=natsaccounts,verbs=get;list;watch;create;update;patch;delete
 
 func NewAccountServer() *NatsAccountServer {
-	return &NatsAccountServer{
+	server := &NatsAccountServer{
 		accountMap: make(map[string]string),
+		alive: make(chan interface{}),
+		natsReady: sync.Mutex{},
 	}
+
+	// Keep this locked until r.nc is set at which point we can unlock it
+	server.natsReady.Lock()
+
+	return server
 }
 
 func connectToNats(url, credsFile string, tlsConf NatsTlsConfig) (*nats.Conn, error) {
@@ -70,6 +82,9 @@ func connectToNats(url, credsFile string, tlsConf NatsTlsConfig) (*nats.Conn, er
 }
 
 func (r *NatsAccountServer) Run(ctx context.Context, url string, credsFile string, tlsConf NatsTlsConfig) error {
+	// Close if the this function exits, as we're probably not alive anymore!
+	defer close(r.alive)
+
 	logger := log.FromContext(ctx)
 	logger.Info("Connecting to nats", "server", url)
 	nc, err := connectToNats(url, credsFile, tlsConf)
@@ -77,6 +92,9 @@ func (r *NatsAccountServer) Run(ctx context.Context, url string, credsFile strin
 		return err
 	}
 	r.nc = nc
+	// nc is now visible so we can unlock this and allow health checks
+	r.natsReady.Unlock()
+
 	logger.Info("subscribing to account lookup")
 	sub, err := nc.Subscribe("$SYS.REQ.ACCOUNT.*.CLAIMS.LOOKUP", func(msg *nats.Msg) {
 		accountId := strings.TrimSuffix(strings.TrimPrefix(msg.Subject, "$SYS.REQ.ACCOUNT."), ".CLAIMS.LOOKUP")
@@ -93,6 +111,28 @@ func (r *NatsAccountServer) Run(ctx context.Context, url string, credsFile strin
 	}
 	<-ctx.Done()
 	return sub.Unsubscribe()
+}
+
+func (r *NatsAccountServer) Healthy(req *http.Request) error {
+	if _, ok := <- r.alive ; !ok {
+		return fmt.Errorf("Not connected to NATs")
+	} else {
+		return nil
+	}
+}
+
+func (r *NatsAccountServer) Ready(req *http.Request) error {
+	if !r.natsReady.TryLock() {
+		return fmt.Errorf("Not initialised NATs client yet")
+	}
+
+	r.natsReady.Unlock()
+	if !r.nc.IsConnected() || r.nc.IsReconnecting() {
+		return fmt.Errorf("NATs is not connected")
+	}
+
+	// All seems good
+	return nil
 }
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to

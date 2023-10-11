@@ -78,6 +78,9 @@ func main() {
 	accountServer.Scheme = mgr.GetScheme()
 	accountServer.Client = mgr.GetClient()
 
+	mgr.AddHealthzCheck("accountServer", accountServer.Healthy)
+	mgr.AddReadyzCheck("accountServer", accountServer.Ready)
+
 	go func() {
 		tlsConf := controllers.NatsTlsConfig {
 			ClientCertPath: os.Getenv("NATS_CLIENT_CERT_PATH"),
